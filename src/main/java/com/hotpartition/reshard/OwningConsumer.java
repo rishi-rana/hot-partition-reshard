@@ -61,15 +61,33 @@ public final class OwningConsumer implements AutoCloseable {
         this.reshardActive = active;
     }
 
+    private final java.util.function.IntFunction<BucketWorker> workerFactory;
+
     public OwningConsumer(KafkaConsumer<String, byte[]> consumer,
                            TopicPartition partition,
                            int numBuckets,
                            BiConsumer<ConsumerRecord<String, byte[]>, Runnable> processor) {
+        this(consumer, partition, numBuckets, processor, InProcessBucketWorker::new);
+    }
+
+    /**
+     * @param workerFactory creates a (not-yet-started) {@link BucketWorker} for a given
+     *                      bucket id. Defaults to {@link InProcessBucketWorker}; pass a
+     *                      different factory to swap in a cross-process transport (e.g.
+     *                      {@code SpilloverBucketWorker} from the spillover-topic transport)
+     *                      without changing anything else here.
+     */
+    public OwningConsumer(KafkaConsumer<String, byte[]> consumer,
+                           TopicPartition partition,
+                           int numBuckets,
+                           BiConsumer<ConsumerRecord<String, byte[]>, Runnable> processor,
+                           java.util.function.IntFunction<BucketWorker> workerFactory) {
         this.consumer = consumer;
         this.partition = partition;
         this.numBuckets = numBuckets;
         this.router = new KeyBucketRouter(numBuckets, 0);
         this.processor = processor;
+        this.workerFactory = workerFactory;
         this.windowStartMs = System.currentTimeMillis();
 
         Map<Integer, LambdaMuTracker> trackers = new HashMap<>();
@@ -84,7 +102,7 @@ public final class OwningConsumer implements AutoCloseable {
 
     private BucketWorker workerFor(int bucketId) {
         return bucketWorkers.computeIfAbsent(bucketId, id -> {
-            BucketWorker w = new InProcessBucketWorker(id);
+            BucketWorker w = workerFactory.apply(id);
             w.start();
             return w;
         });
