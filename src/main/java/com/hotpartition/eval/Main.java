@@ -28,7 +28,7 @@ public final class Main {
             log.info("using external Kafka broker at {}", bootstrapServers);
         } else {
             log.info("no bootstrap.servers provided; starting a disposable broker via Testcontainers");
-            container = new KafkaContainer(DockerImageName.parse("apache/kafka:3.9.0"));
+            container = new KafkaContainer(DockerImageName.parse("apache/kafka:4.3.1"));
             container.start();
             bootstrapServers = container.getBootstrapServers();
             log.info("Testcontainers Kafka broker started at {}", bootstrapServers);
@@ -48,6 +48,7 @@ public final class Main {
         int numKeys = Integer.getInteger("numKeys", 200);
         int numBuckets = Integer.getInteger("numBuckets", 4);
         long processingNanos = Long.getLong("processingNanosPerRecord", 50_000L);
+        short replicationFactor = Short.parseShort(System.getProperty("replicationFactor", "1"));
         double[] skews = {0.0, 0.5, 1.0, 1.5, 2.5};
 
         SyntheticWorkloadProducer producer = new SyntheticWorkloadProducer(bootstrapServers);
@@ -56,7 +57,7 @@ public final class Main {
         List<BenchmarkRunner.Result> results = new ArrayList<>();
         for (double skew : skews) {
             String topic = "bench-skew-" + String.valueOf(skew).replace('.', '_');
-            producer.ensureTopic(topic);
+            producer.ensureTopic(topic, replicationFactor);
             producer.produce(topic, recordCount, numKeys, skew, 42L, 64);
             double hhi = SyntheticWorkloadProducer.theoreticalHhi(numKeys, skew, 42L);
             TopicPartition tp = new TopicPartition(topic, 0);

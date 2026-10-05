@@ -22,10 +22,14 @@ public final class SyntheticWorkloadProducer {
     }
 
     public void ensureTopic(String topic) {
+        ensureTopic(topic, (short) 1);
+    }
+
+    public void ensureTopic(String topic, short replicationFactor) {
         Properties props = new Properties();
         props.put("bootstrap.servers", bootstrapServers);
         try (Admin admin = Admin.create(props)) {
-            admin.createTopics(java.util.List.of(new NewTopic(topic, 1, (short) 1))).all().get();
+            admin.createTopics(java.util.List.of(new NewTopic(topic, 1, replicationFactor))).all().get();
         } catch (ExecutionException e) {
             if (!(e.getCause() instanceof TopicExistsException)) {
                 throw new RuntimeException(e);

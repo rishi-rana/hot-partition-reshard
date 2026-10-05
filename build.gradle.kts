@@ -17,7 +17,7 @@ repositories {
 }
 
 dependencies {
-    implementation("org.apache.kafka:kafka-clients:4.3.0")
+    implementation("org.apache.kafka:kafka-clients:4.3.1")
     implementation("org.slf4j:slf4j-api:2.0.17")
     implementation("org.testcontainers:kafka:1.21.3")
     runtimeOnly("ch.qos.logback:logback-classic:1.5.19")
@@ -27,7 +27,7 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("org.testcontainers:kafka:1.21.3")
     testImplementation("org.testcontainers:junit-jupiter:1.21.3")
-    testImplementation("org.apache.kafka:kafka-clients:4.3.0")
+    testImplementation("org.apache.kafka:kafka-clients:4.3.1")
 }
 
 tasks.test {
@@ -40,6 +40,18 @@ tasks.test {
 
 application {
     mainClass.set("com.hotpartition.eval.Main")
+}
+
+// `./gradlew run` forks a separate JVM; -D flags on the gradle command line only
+// set properties on the Gradle JVM itself, so forward the ones the benchmark
+// cares about explicitly rather than silently ignoring them.
+tasks.named<JavaExec>("run") {
+    listOf(
+        "bootstrap.servers", "recordCount", "numKeys", "numBuckets",
+        "processingNanosPerRecord", "replicationFactor", "api.version"
+    ).forEach { key ->
+        System.getProperty(key)?.let { systemProperty(key, it) }
+    }
 }
 
 tasks.withType<JavaCompile> {
