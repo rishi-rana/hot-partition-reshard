@@ -50,6 +50,8 @@ public final class Main {
         long processingNanos = Long.getLong("processingNanosPerRecord", 50_000L);
         short replicationFactor = Short.parseShort(System.getProperty("replicationFactor", "1"));
         boolean includeSpillover = Boolean.getBoolean("includeSpillover");
+        boolean includeRpc = Boolean.getBoolean("includeRpc");
+        int rpcBasePort = Integer.getInteger("rpcBasePort", 9500);
         double[] skews = {0.0, 0.5, 1.0, 1.5, 2.5};
 
         SyntheticWorkloadProducer producer = new SyntheticWorkloadProducer(bootstrapServers);
@@ -79,6 +81,11 @@ public final class Main {
             if (includeSpillover) {
                 var spillover = runner.runFullMechanismSpillover(topic, tp, recordCount, numBuckets, processingNanos);
                 results.add(withSkewHhi(spillover, skew, hhi));
+            }
+
+            if (includeRpc) {
+                var rpc = runner.runFullMechanismRpc(topic, tp, recordCount, numBuckets, processingNanos, rpcBasePort);
+                results.add(withSkewHhi(rpc, skew, hhi));
             }
         }
 

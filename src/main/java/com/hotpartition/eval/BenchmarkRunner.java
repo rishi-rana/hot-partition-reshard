@@ -202,6 +202,55 @@ public final class BenchmarkRunner {
         }
     }
 
+    /**
+     * Same drain as {@link #runFullMechanism}, but delegating via transport Option A
+     * (direct RPC) to genuinely separate OS processes -- lowest-latency of the three
+     * transports, since there's no broker hop at all for the delegation path itself
+     * (unlike Option B's produce+consume round trip each way).
+     */
+    public Result runFullMechanismRpc(String topic, TopicPartition tp, int recordCount, int numBuckets,
+                                       long processingNanosPerRecord, int basePort) throws Exception {
+        List<Process> peers = new ArrayList<>();
+        for (int b = 0; b < numBuckets; b++) {
+            int port = basePort + b;
+            peers.add(new ProcessBuilder(
+                    "java", "-cp", System.getProperty("java.class.path"),
+                    "com.hotpartition.transport.rpc.RpcPeerWorker",
+                    String.valueOf(port), String.valueOf(b), String.valueOf(processingNanosPerRecord))
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start());
+        }
+        // give the peer JVMs a moment to start listening before the sweep begins.
+        Thread.sleep(2000);
+
+        Properties props = baseConsumerProps("rpc-" + topic);
+        KafkaConsumer<String, byte[]> kafkaConsumer = new KafkaConsumer<>(props);
+        try (OwningConsumer owner = new OwningConsumer(kafkaConsumer, tp, numBuckets, (rec, done) -> {
+            throw new IllegalStateException("processor must not run on the owner side for the RPC transport");
+        }, bucketId -> new com.hotpartition.transport.rpc.RpcBucketWorker(bucketId, "localhost", basePort + bucketId))) {
+            owner.assignAndSeek();
+            kafkaConsumer.seekToBeginning(List.of(tp));
+            owner.forceReshardActive(true);
+
+            long start = System.currentTimeMillis();
+            long endOffset = kafkaConsumer.endOffsets(List.of(tp)).get(tp);
+            while (owner.lastCommittedOffset() + 1 < endOffset) {
+                owner.pollOnce(Duration.ofMillis(500));
+            }
+            long elapsed = System.currentTimeMillis() - start;
+            return new Result("full-mechanism-rpc", 0, 0, recordCount, elapsed, rate(recordCount, elapsed));
+        } finally {
+            for (Process p : peers) {
+                p.destroy();
+            }
+            for (Process p : peers) {
+                p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+                p.destroyForcibly();
+            }
+        }
+    }
+
     private KafkaProducer<String, byte[]> spilloverProducer() {
         Properties props = new Properties();
         props.put("bootstrap.servers", bootstrapServers);
