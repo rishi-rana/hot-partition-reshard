@@ -39,24 +39,26 @@ class SpilloverEndToEndSmokeTest {
         int bucketId = 0;
         int recordCount = 20;
         TopicPartition originalPartition = new TopicPartition("spillover-smoke-source", 0);
+        String namePrefix = "spillover-smoke-" + System.nanoTime();
+        SpilloverTopics topics = new SpilloverTopics(namePrefix);
 
         Properties adminProps = new Properties();
         adminProps.put("bootstrap.servers", bootstrap);
         try (Admin admin = Admin.create(adminProps)) {
-            SpilloverTopics.ensureExists(admin, 1, (short) 1);
+            topics.ensureExists(admin, 1, (short) 1);
         }
 
         Process peerProcess = new ProcessBuilder(
                 "java", "-cp", System.getProperty("java.class.path"),
                 "com.hotpartition.transport.spillover.SpilloverPeerWorker",
-                bootstrap, String.valueOf(bucketId), "10000")
+                bootstrap, namePrefix, String.valueOf(bucketId), "10000")
                 .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.INHERIT)
                 .start();
 
         try {
             SpilloverBucketWorker ownerWorker = new SpilloverBucketWorker(
-                    bucketId, originalPartition, newByteProducer(bootstrap), newStringConsumer(bootstrap));
+                    bucketId, originalPartition, topics, newByteProducer(bootstrap), newStringConsumer(bootstrap));
             ownerWorker.start();
 
             List<Long> completedInOrder = new CopyOnWriteArrayList<>();

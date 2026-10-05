@@ -43,12 +43,13 @@ public final class Main {
         }
     }
 
-    private static void runSweep(String bootstrapServers) {
+    private static void runSweep(String bootstrapServers) throws Exception {
         int recordCount = Integer.getInteger("recordCount", 5000);
         int numKeys = Integer.getInteger("numKeys", 200);
         int numBuckets = Integer.getInteger("numBuckets", 4);
         long processingNanos = Long.getLong("processingNanosPerRecord", 50_000L);
         short replicationFactor = Short.parseShort(System.getProperty("replicationFactor", "1"));
+        boolean includeSpillover = Boolean.getBoolean("includeSpillover");
         double[] skews = {0.0, 0.5, 1.0, 1.5, 2.5};
 
         SyntheticWorkloadProducer producer = new SyntheticWorkloadProducer(bootstrapServers);
@@ -74,6 +75,11 @@ public final class Main {
 
             var full = runner.runFullMechanism(topic, tp, recordCount, numBuckets);
             results.add(withSkewHhi(full, skew, hhi));
+
+            if (includeSpillover) {
+                var spillover = runner.runFullMechanismSpillover(topic, tp, recordCount, numBuckets, processingNanos);
+                results.add(withSkewHhi(spillover, skew, hhi));
+            }
         }
 
         System.out.println("config,skew,hhi,recordCount,elapsedMs,recordsPerSec");

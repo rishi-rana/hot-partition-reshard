@@ -34,15 +34,17 @@ public final class SpilloverPeerWorker implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(SpilloverPeerWorker.class);
 
     private final int bucketId;
+    private final SpilloverTopics topics;
     private final KafkaConsumer<String, byte[]> spilloverConsumer;
     private final KafkaProducer<String, String> completionsProducer;
     private final long simulatedProcessingNanosPerRecord;
     private final AtomicBoolean running = new AtomicBoolean(true);
 
-    public SpilloverPeerWorker(int bucketId, KafkaConsumer<String, byte[]> spilloverConsumer,
+    public SpilloverPeerWorker(int bucketId, SpilloverTopics topics, KafkaConsumer<String, byte[]> spilloverConsumer,
                                KafkaProducer<String, String> completionsProducer,
                                long simulatedProcessingNanosPerRecord) {
         this.bucketId = bucketId;
+        this.topics = topics;
         this.spilloverConsumer = spilloverConsumer;
         this.completionsProducer = completionsProducer;
         this.simulatedProcessingNanosPerRecord = simulatedProcessingNanosPerRecord;
@@ -55,7 +57,7 @@ public final class SpilloverPeerWorker implements AutoCloseable {
 
     /** Blocks, consuming and acking, until {@link #stop()} is called. */
     public void run() {
-        TopicPartition partition = new TopicPartition(SpilloverTopics.SPILLOVER_TOPIC, bucketId);
+        TopicPartition partition = new TopicPartition(topics.spilloverTopic(), bucketId);
         spilloverConsumer.assign(List.of(partition));
         spilloverConsumer.seekToBeginning(List.of(partition));
 
@@ -66,7 +68,7 @@ public final class SpilloverPeerWorker implements AutoCloseable {
                     long origOffset = headerLong(record, SpilloverTopics.HEADER_ORIG_OFFSET);
                     busyWork();
                     completionsProducer.send(new ProducerRecord<>(
-                            SpilloverTopics.COMPLETIONS_TOPIC, bucketId, null, Long.toString(origOffset)));
+                            topics.completionsTopic(), bucketId, null, Long.toString(origOffset)));
                 }
             } catch (org.apache.kafka.common.errors.WakeupException e) {
                 // expected on stop()
@@ -103,19 +105,20 @@ public final class SpilloverPeerWorker implements AutoCloseable {
         completionsProducer.close();
     }
 
-    /** Launches as a standalone process: args = bootstrapServers, bucketId, processingNanosPerRecord. */
+    /** Launches as a standalone process: args = bootstrapServers, namePrefix, bucketId, processingNanosPerRecord. */
     public static void main(String[] args) {
-        if (args.length != 3) {
-            System.err.println("usage: SpilloverPeerWorker <bootstrapServers> <bucketId> <processingNanosPerRecord>");
+        if (args.length != 4) {
+            System.err.println("usage: SpilloverPeerWorker <bootstrapServers> <namePrefix> <bucketId> <processingNanosPerRecord>");
             System.exit(1);
         }
         String bootstrapServers = args[0];
-        int bucketId = Integer.parseInt(args[1]);
-        long processingNanos = Long.parseLong(args[2]);
+        SpilloverTopics topics = new SpilloverTopics(args[1]);
+        int bucketId = Integer.parseInt(args[2]);
+        long processingNanos = Long.parseLong(args[3]);
 
         Properties consumerProps = new Properties();
         consumerProps.put("bootstrap.servers", bootstrapServers);
-        consumerProps.put("group.id", "spillover-peer-standalone-" + bucketId);
+        consumerProps.put("group.id", "spillover-peer-standalone-" + args[1] + "-" + bucketId);
         consumerProps.put("key.deserializer", StringDeserializer.class.getName());
         consumerProps.put("value.deserializer", ByteArrayDeserializer.class.getName());
 
@@ -124,7 +127,7 @@ public final class SpilloverPeerWorker implements AutoCloseable {
         producerProps.put("key.serializer", StringSerializer.class.getName());
         producerProps.put("value.serializer", StringSerializer.class.getName());
 
-        try (SpilloverPeerWorker worker = new SpilloverPeerWorker(bucketId,
+        try (SpilloverPeerWorker worker = new SpilloverPeerWorker(bucketId, topics,
                 new KafkaConsumer<>(consumerProps), new KafkaProducer<>(producerProps), processingNanos)) {
             Runtime.getRuntime().addShutdownHook(new Thread(worker::stop));
             log.info("spillover peer worker for bucket {} starting, bootstrap={}", bucketId, bootstrapServers);

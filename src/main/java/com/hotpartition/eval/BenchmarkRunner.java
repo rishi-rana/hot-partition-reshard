@@ -4,6 +4,7 @@ import com.hotpartition.reshard.OwningConsumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
@@ -11,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -128,12 +130,93 @@ public final class BenchmarkRunner {
 
             long start = System.currentTimeMillis();
             long endOffset = kafkaConsumer.endOffsets(List.of(tp)).get(tp);
+            int iter = 0;
             while (owner.lastCommittedOffset() + 1 < endOffset) {
-                owner.pollOnce(Duration.ofMillis(500));
+                long t0 = System.currentTimeMillis();
+                int n = owner.pollOnce(Duration.ofMillis(500));
+                iter++;
+                if (Boolean.getBoolean("debugFullMechanism")) {
+                    log.info("DEBUG iter={} tookMs={} fetched={} committed={} position={} endOffset={}",
+                            iter, System.currentTimeMillis() - t0, n, owner.lastCommittedOffset(),
+                            kafkaConsumer.position(tp), endOffset);
+                }
             }
             long elapsed = System.currentTimeMillis() - start;
             return new Result("full-mechanism", 0, 0, recordCount, elapsed, rate(recordCount, elapsed));
         }
+    }
+
+    /**
+     * Same drain as {@link #runFullMechanism}, but delegating via transport Option B
+     * (spillover topic) to genuinely separate OS processes instead of in-process threads
+     * -- the actual cross-process cost the design doc's Mechanism gap calls for measuring,
+     * not the in-process dispatch cost {@link #runFullMechanism} measures.
+     */
+    public Result runFullMechanismSpillover(String topic, TopicPartition tp, int recordCount, int numBuckets,
+                                             long processingNanosPerRecord) throws Exception {
+        var topics = new com.hotpartition.transport.spillover.SpilloverTopics(topic);
+        Properties adminProps = new Properties();
+        adminProps.put("bootstrap.servers", bootstrapServers);
+        try (org.apache.kafka.clients.admin.Admin admin = org.apache.kafka.clients.admin.Admin.create(adminProps)) {
+            topics.ensureExists(admin, numBuckets, (short) 1);
+        }
+
+        List<Process> peers = new ArrayList<>();
+        for (int b = 0; b < numBuckets; b++) {
+            peers.add(new ProcessBuilder(
+                    "java", "-cp", System.getProperty("java.class.path"),
+                    "com.hotpartition.transport.spillover.SpilloverPeerWorker",
+                    bootstrapServers, topic, String.valueOf(b), String.valueOf(processingNanosPerRecord))
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start());
+        }
+        // give the peer JVMs a moment to start and subscribe before the sweep begins.
+        Thread.sleep(2000);
+
+        Properties props = baseConsumerProps("spillover-" + topic);
+        KafkaConsumer<String, byte[]> kafkaConsumer = new KafkaConsumer<>(props);
+        try (OwningConsumer owner = new OwningConsumer(kafkaConsumer, tp, numBuckets, (rec, done) -> {
+            throw new IllegalStateException("processor must not run on the owner side for the spillover transport");
+        }, bucketId -> new com.hotpartition.transport.spillover.SpilloverBucketWorker(
+                bucketId, tp, topics, spilloverProducer(), spilloverCompletionsConsumer(topic, bucketId)))) {
+            owner.assignAndSeek();
+            kafkaConsumer.seekToBeginning(List.of(tp));
+            owner.forceReshardActive(true);
+
+            long start = System.currentTimeMillis();
+            long endOffset = kafkaConsumer.endOffsets(List.of(tp)).get(tp);
+            while (owner.lastCommittedOffset() + 1 < endOffset) {
+                owner.pollOnce(Duration.ofMillis(500));
+            }
+            long elapsed = System.currentTimeMillis() - start;
+            return new Result("full-mechanism-spillover", 0, 0, recordCount, elapsed, rate(recordCount, elapsed));
+        } finally {
+            for (Process p : peers) {
+                p.destroy();
+            }
+            for (Process p : peers) {
+                p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+                p.destroyForcibly();
+            }
+        }
+    }
+
+    private KafkaProducer<String, byte[]> spilloverProducer() {
+        Properties props = new Properties();
+        props.put("bootstrap.servers", bootstrapServers);
+        props.put("key.serializer", org.apache.kafka.common.serialization.StringSerializer.class.getName());
+        props.put("value.serializer", org.apache.kafka.common.serialization.ByteArraySerializer.class.getName());
+        return new KafkaProducer<>(props);
+    }
+
+    private KafkaConsumer<String, String> spilloverCompletionsConsumer(String topic, int bucketId) {
+        Properties props = new Properties();
+        props.put("bootstrap.servers", bootstrapServers);
+        props.put("group.id", "spillover-owner-" + topic + "-" + bucketId);
+        props.put("key.deserializer", StringDeserializer.class.getName());
+        props.put("value.deserializer", StringDeserializer.class.getName());
+        return new KafkaConsumer<>(props);
     }
 
     private Properties baseConsumerProps(String groupId) {

@@ -25,10 +25,29 @@ public final class SyntheticWorkloadProducer {
         ensureTopic(topic, (short) 1);
     }
 
+    /**
+     * Deletes the topic first if it already exists, then creates it fresh. Benchmark runs
+     * reuse fixed topic names (e.g. "bench-skew-0_0") across separate invocations of this
+     * harness; without deleting first, each new run would silently append to -- rather
+     * than replace -- whatever backlog earlier runs left behind, so both recordCount and
+     * endOffsets() would reflect the accumulated total, not this run's own data. (This was
+     * a real bug, not a hypothetical: it's exactly what made an early comparison run look
+     * like a ~90x throughput regression that didn't actually exist.)
+     */
     public void ensureTopic(String topic, short replicationFactor) {
         Properties props = new Properties();
         props.put("bootstrap.servers", bootstrapServers);
         try (Admin admin = Admin.create(props)) {
+            try {
+                admin.deleteTopics(java.util.List.of(topic)).all().get();
+                // deletion is async on the broker; give it a moment before recreating under
+                // the same name, or creation can race a still-in-progress delete.
+                Thread.sleep(1000);
+            } catch (ExecutionException e) {
+                if (!(e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException)) {
+                    throw new RuntimeException(e);
+                }
+            }
             admin.createTopics(java.util.List.of(new NewTopic(topic, 1, replicationFactor))).all().get();
         } catch (ExecutionException e) {
             if (!(e.getCause() instanceof TopicExistsException)) {

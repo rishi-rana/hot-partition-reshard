@@ -48,7 +48,7 @@ application {
 tasks.named<JavaExec>("run") {
     listOf(
         "bootstrap.servers", "recordCount", "numKeys", "numBuckets",
-        "processingNanosPerRecord", "replicationFactor", "api.version"
+        "processingNanosPerRecord", "replicationFactor", "api.version", "includeSpillover", "debugFullMechanism"
     ).forEach { key ->
         System.getProperty(key)?.let { systemProperty(key, it) }
     }

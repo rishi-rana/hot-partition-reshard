@@ -36,17 +36,19 @@ public final class SpilloverBucketWorker implements BucketWorker {
 
     private final int bucketId;
     private final TopicPartition originalPartition;
+    private final SpilloverTopics topics;
     private final KafkaProducer<String, byte[]> spilloverProducer;
     private final KafkaConsumer<String, String> completionsConsumer;
     private final Map<Long, Runnable> pending = new ConcurrentHashMap<>();
     private final AtomicBoolean running = new AtomicBoolean(false);
     private Thread pollThread;
 
-    public SpilloverBucketWorker(int bucketId, TopicPartition originalPartition,
+    public SpilloverBucketWorker(int bucketId, TopicPartition originalPartition, SpilloverTopics topics,
                                   KafkaProducer<String, byte[]> spilloverProducer,
                                   KafkaConsumer<String, String> completionsConsumer) {
         this.bucketId = bucketId;
         this.originalPartition = originalPartition;
+        this.topics = topics;
         this.spilloverProducer = spilloverProducer;
         this.completionsConsumer = completionsConsumer;
     }
@@ -54,7 +56,7 @@ public final class SpilloverBucketWorker implements BucketWorker {
     @Override
     public void start() {
         running.set(true);
-        TopicPartition completionsPartition = new TopicPartition(SpilloverTopics.COMPLETIONS_TOPIC, bucketId);
+        TopicPartition completionsPartition = new TopicPartition(topics.completionsTopic(), bucketId);
         completionsConsumer.assign(List.of(completionsPartition));
         completionsConsumer.seekToBeginning(List.of(completionsPartition));
         pollThread = new Thread(this::runLoop, "spillover-completions-bucket-" + bucketId);
@@ -68,7 +70,7 @@ public final class SpilloverBucketWorker implements BucketWorker {
                         Runnable onComplete) {
         pending.put(record.offset(), onComplete);
         ProducerRecord<String, byte[]> spilloverRecord = new ProducerRecord<>(
-                SpilloverTopics.SPILLOVER_TOPIC, bucketId, record.key(), record.value());
+                topics.spilloverTopic(), bucketId, record.key(), record.value());
         spilloverRecord.headers()
                 .add(new RecordHeader(SpilloverTopics.HEADER_ORIG_TOPIC,
                         originalPartition.topic().getBytes(StandardCharsets.UTF_8)))
