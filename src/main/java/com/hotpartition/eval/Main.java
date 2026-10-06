@@ -55,6 +55,8 @@ public final class Main {
         boolean includeBatchedRpc = Boolean.getBoolean("includeBatchedRpc");
         int rpcBatchSize = Integer.getInteger("rpcBatchSize", 50);
         long rpcLingerMs = Long.getLong("rpcLingerMs", 5L);
+        boolean includeClaim = Boolean.getBoolean("includeClaim");
+        int claimNumPeers = Integer.getInteger("claimNumPeers", numBuckets);
         double[] skews = {0.0, 0.5, 1.0, 1.5, 2.5};
 
         SyntheticWorkloadProducer producer = new SyntheticWorkloadProducer(bootstrapServers);
@@ -95,6 +97,12 @@ public final class Main {
                 var batchedRpc = runner.runFullMechanismBatchedRpc(topic, tp, recordCount, numBuckets,
                         processingNanos, rpcBasePort + 100, rpcBatchSize, rpcLingerMs);
                 results.add(withSkewHhi(batchedRpc, skew, hhi));
+            }
+
+            if (includeClaim) {
+                var claim = runner.runFullMechanismClaim(topic, tp, recordCount, numBuckets, claimNumPeers,
+                        processingNanos);
+                results.add(withSkewHhi(claim, skew, hhi));
             }
         }
 

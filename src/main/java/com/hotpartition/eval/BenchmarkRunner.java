@@ -203,6 +203,68 @@ public final class BenchmarkRunner {
     }
 
     /**
+     * Same drain as {@link #runFullMechanismSpillover}, but transport Option C
+     * (work-stealing claim topic): the owner side is identical --
+     * {@code SpilloverBucketWorker} doesn't care how peers divide up bucket ownership --
+     * only the peers differ, joining one shared consumer group instead of each being
+     * pinned to a fixed partition, so Kafka's own rebalance protocol decides who claims
+     * which bucket. {@code numPeers} need not equal {@code numBuckets}: fewer peers than
+     * buckets means some peers own multiple partitions, more peers than buckets means the
+     * excess sit idle -- this apples-to-apples comparison against B uses numPeers ==
+     * numBuckets, matching every other transport's benchmark configuration.
+     */
+    public Result runFullMechanismClaim(String topic, TopicPartition tp, int recordCount, int numBuckets,
+                                         int numPeers, long processingNanosPerRecord) throws Exception {
+        var topics = new com.hotpartition.transport.spillover.SpilloverTopics(topic);
+        Properties adminProps = new Properties();
+        adminProps.put("bootstrap.servers", bootstrapServers);
+        try (org.apache.kafka.clients.admin.Admin admin = org.apache.kafka.clients.admin.Admin.create(adminProps)) {
+            topics.ensureExists(admin, numBuckets, (short) 1);
+        }
+
+        List<Process> peers = new ArrayList<>();
+        for (int i = 0; i < numPeers; i++) {
+            peers.add(new ProcessBuilder(
+                    "java", "-cp", System.getProperty("java.class.path"),
+                    "com.hotpartition.transport.claim.ClaimPeerWorker",
+                    bootstrapServers, topic, String.valueOf(processingNanosPerRecord))
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start());
+        }
+        // give the peer JVMs a moment to start, join the group, and settle a rebalance
+        // before the sweep begins -- rebalancing takes longer than a bare subscribe.
+        Thread.sleep(4000);
+
+        Properties props = baseConsumerProps("claim-" + topic);
+        KafkaConsumer<String, byte[]> kafkaConsumer = new KafkaConsumer<>(props);
+        try (OwningConsumer owner = new OwningConsumer(kafkaConsumer, tp, numBuckets, (rec, done) -> {
+            throw new IllegalStateException("processor must not run on the owner side for the claim-topic transport");
+        }, bucketId -> new com.hotpartition.transport.spillover.SpilloverBucketWorker(
+                bucketId, tp, topics, spilloverProducer(), spilloverCompletionsConsumer(topic, bucketId)))) {
+            owner.assignAndSeek();
+            kafkaConsumer.seekToBeginning(List.of(tp));
+            owner.forceReshardActive(true);
+
+            long start = System.currentTimeMillis();
+            long endOffset = kafkaConsumer.endOffsets(List.of(tp)).get(tp);
+            while (owner.lastCommittedOffset() + 1 < endOffset) {
+                owner.pollOnce(Duration.ofMillis(500));
+            }
+            long elapsed = System.currentTimeMillis() - start;
+            return new Result("full-mechanism-claim", 0, 0, recordCount, elapsed, rate(recordCount, elapsed));
+        } finally {
+            for (Process p : peers) {
+                p.destroy();
+            }
+            for (Process p : peers) {
+                p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+                p.destroyForcibly();
+            }
+        }
+    }
+
+    /**
      * Same drain as {@link #runFullMechanism}, but delegating via transport Option A
      * (direct RPC) to genuinely separate OS processes. Despite having no broker hop at
      * all for the delegation path, this measured *slower* than Option B (spillover) --
