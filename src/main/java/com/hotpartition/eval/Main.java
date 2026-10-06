@@ -35,12 +35,37 @@ public final class Main {
         }
 
         try {
-            runSweep(bootstrapServers);
+            if (Boolean.getBoolean("measureReactionLatency")) {
+                runReactionLatency(bootstrapServers);
+            } else {
+                runSweep(bootstrapServers);
+            }
         } finally {
             if (container != null) {
                 container.stop();
             }
         }
+    }
+
+    private static void runReactionLatency(String bootstrapServers) throws Exception {
+        int numBuckets = Integer.getInteger("numBuckets", 4);
+        int warmupBatches = Integer.getInteger("warmupBatches", 20);
+        int warmupBatchSize = Integer.getInteger("warmupBatchSize", 20);
+        long warmupIntervalMs = Long.getLong("warmupIntervalMs", 150L);
+        int burstNumKeys = Integer.getInteger("burstNumKeys", 200);
+        double burstSkew = Double.parseDouble(System.getProperty("burstSkew", "1.0"));
+        int burstRecordCount = Integer.getInteger("burstRecordCount", 3000);
+        long detectionTimeoutMs = Long.getLong("detectionTimeoutMs", 30000L);
+        String topic = "reaction-latency-" + System.nanoTime();
+
+        ReactionLatencyExperiment experiment = new ReactionLatencyExperiment();
+        var result = experiment.run(bootstrapServers, topic, numBuckets,
+                warmupBatches, warmupBatchSize, warmupIntervalMs,
+                burstNumKeys, burstSkew, burstRecordCount, detectionTimeoutMs);
+
+        System.out.println("detected,reactionLatencyMs,recordsProcessedAtDetection,falsePositiveDuringWarmup");
+        System.out.printf("%s,%d,%d,%s%n", result.detected(), result.reactionLatencyMs(),
+                result.recordsProcessedAtDetection(), result.falsePositiveDuringWarmup());
     }
 
     private static void runSweep(String bootstrapServers) throws Exception {
