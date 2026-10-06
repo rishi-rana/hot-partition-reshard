@@ -232,9 +232,18 @@ public final class BenchmarkRunner {
                     .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                     .start());
         }
-        // give the peer JVMs a moment to start, join the group, and settle a rebalance
-        // before the sweep begins -- rebalancing takes longer than a bare subscribe.
-        Thread.sleep(4000);
+        // Give the peer JVMs time to start, join the group, and settle a *stable* rebalance
+        // before the sweep begins. This matters more than it looks: with 4 peer processes
+        // starting back to back (not atomically), the classic/range assignor's eager
+        // rebalancing can still be mid-churn (join -> sync -> rejoin as later peers arrive)
+        // when a shorter wait (4s) was used -- measured result at 4s was ~35% of in-process
+        // throughput, which looked like a real transport deficit until raising this to 10s
+        // brought it to 80-89%, in line with the spillover transport. The ~3x "deficit" was
+        // entirely rebalance-settling overhead bleeding into the timed window, not a
+        // property of the claim mechanism itself -- see the design doc for the corrected
+        // measurement and what it says about this transport's steady-state cost once the
+        // group has actually stabilized.
+        Thread.sleep(10000);
 
         Properties props = baseConsumerProps("claim-" + topic);
         KafkaConsumer<String, byte[]> kafkaConsumer = new KafkaConsumer<>(props);
