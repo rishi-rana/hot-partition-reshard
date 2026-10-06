@@ -52,7 +52,8 @@ tasks.named<JavaExec>("run") {
         "includeRpc", "rpcBasePort", "includeBatchedRpc", "rpcBatchSize", "rpcLingerMs",
         "includeClaim", "claimNumPeers", "includeRangeBarrier", "dependencyTimeoutMs",
         "measureReactionLatency", "warmupBatches", "warmupBatchSize", "warmupIntervalMs",
-        "burstNumKeys", "burstSkew", "burstRecordCount", "detectionTimeoutMs"
+        "burstNumKeys", "burstSkew", "burstRecordCount", "detectionTimeoutMs",
+        "repeatedTrials", "trials"
     ).forEach { key ->
         System.getProperty(key)?.let { systemProperty(key, it) }
     }

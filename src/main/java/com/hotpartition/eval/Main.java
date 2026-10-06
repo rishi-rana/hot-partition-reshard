@@ -37,6 +37,8 @@ public final class Main {
         try {
             if (Boolean.getBoolean("measureReactionLatency")) {
                 runReactionLatency(bootstrapServers);
+            } else if (Boolean.getBoolean("repeatedTrials")) {
+                runRepeatedTrials(bootstrapServers);
             } else {
                 runSweep(bootstrapServers);
             }
@@ -148,5 +150,98 @@ public final class Main {
 
     private static BenchmarkRunner.Result withSkewHhi(BenchmarkRunner.Result r, double skew, double hhi) {
         return new BenchmarkRunner.Result(r.config(), skew, hhi, r.recordCount(), r.elapsedMs(), r.recordsPerSec());
+    }
+
+    /**
+     * Every benchmark number in the paper's Evaluation section was previously a single
+     * run. This repeats the seven headline configurations {@code trials} times each, at
+     * two representative skew points (near-uniform and the most-skewed point already
+     * reported), and reports mean/stddev/min/max rather than one number -- the gap this
+     * mode exists to close. Each run method already seeks to the beginning and builds
+     * fresh state per call (verified before writing this), so repeated calls against the
+     * same already-produced topic are valid independent trials; the topic is produced
+     * once per skew point, not once per trial, to keep this affordable.
+     */
+    private static void runRepeatedTrials(String bootstrapServers) throws Exception {
+        int trials = Integer.getInteger("trials", 3);
+        int recordCount = Integer.getInteger("recordCount", 20000);
+        int numKeys = Integer.getInteger("numKeys", 2000);
+        int numBuckets = Integer.getInteger("numBuckets", 4);
+        long processingNanos = Long.getLong("processingNanosPerRecord", 50_000L);
+        short replicationFactor = Short.parseShort(System.getProperty("replicationFactor", "3"));
+        int rpcBasePort = Integer.getInteger("rpcBasePort", 9500);
+        int rpcBatchSize = Integer.getInteger("rpcBatchSize", 50);
+        long rpcLingerMs = Long.getLong("rpcLingerMs", 5L);
+        long dependencyTimeoutMs = Long.getLong("dependencyTimeoutMs", 5000L);
+        double[] skews = {0.0, 2.5};
+
+        SyntheticWorkloadProducer producer = new SyntheticWorkloadProducer(bootstrapServers);
+        BenchmarkRunner runner = new BenchmarkRunner(bootstrapServers, processingNanos);
+
+        System.out.println("config,skew,hhi,trials,meanRecordsPerSec,stddevRecordsPerSec,minRecordsPerSec,maxRecordsPerSec");
+
+        for (double skew : skews) {
+            String topic = "trials-skew-" + String.valueOf(skew).replace('.', '_') + "-" + System.nanoTime();
+            producer.ensureTopic(topic, replicationFactor);
+            producer.produce(topic, recordCount, numKeys, skew, 42L, 64);
+            double hhi = SyntheticWorkloadProducer.theoreticalHhi(numKeys, skew, 42L);
+            TopicPartition tp = new TopicPartition(topic, 0);
+            log.info("=== repeated trials: skew={} theoreticalHHI={} ===", skew, hhi);
+
+            reportTrials("baseline", skew, hhi, trials,
+                    () -> runner.runBaseline(topic, tp, recordCount));
+            reportTrials("naive-sharding-unsafe-commit", skew, hhi, trials,
+                    () -> runner.runNaiveShardingUnsafeCommit(topic, tp, recordCount, numBuckets));
+            reportTrials("full-mechanism", skew, hhi, trials,
+                    () -> runner.runFullMechanism(topic, tp, recordCount, numBuckets));
+            reportTrials("full-mechanism-spillover", skew, hhi, trials,
+                    () -> call(() -> runner.runFullMechanismSpillover(topic, tp, recordCount, numBuckets, processingNanos)));
+            reportTrials("full-mechanism-batched-rpc", skew, hhi, trials,
+                    () -> call(() -> runner.runFullMechanismBatchedRpc(topic, tp, recordCount, numBuckets,
+                            processingNanos, rpcBasePort + 100, rpcBatchSize, rpcLingerMs)));
+            reportTrials("full-mechanism-claim", skew, hhi, trials,
+                    () -> call(() -> runner.runFullMechanismClaim(topic, tp, recordCount, numBuckets, numBuckets,
+                            processingNanos)));
+            reportTrials("full-mechanism-range-barrier", skew, hhi, trials,
+                    () -> runner.runFullMechanismRangeBarrier(topic, tp, recordCount, numBuckets, dependencyTimeoutMs));
+        }
+    }
+
+    private interface ThrowingSupplier {
+        BenchmarkRunner.Result get() throws Exception;
+    }
+
+    private static BenchmarkRunner.Result call(ThrowingSupplier s) {
+        try {
+            return s.get();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void reportTrials(String config, double skew, double hhi, int trials, ThrowingSupplier fn) {
+        double[] samples = new double[trials];
+        for (int t = 0; t < trials; t++) {
+            BenchmarkRunner.Result r = call(fn);
+            samples[t] = r.recordsPerSec();
+            log.info("trial {}/{} for {} at skew={}: {} records/sec", t + 1, trials, config, skew, r.recordsPerSec());
+        }
+        double mean = 0;
+        for (double s : samples) {
+            mean += s;
+        }
+        mean /= trials;
+        double variance = 0;
+        for (double s : samples) {
+            variance += (s - mean) * (s - mean);
+        }
+        double stddev = Math.sqrt(variance / trials);
+        double min = samples[0];
+        double max = samples[0];
+        for (double s : samples) {
+            min = Math.min(min, s);
+            max = Math.max(max, s);
+        }
+        System.out.printf("%s,%.2f,%.4f,%d,%.1f,%.1f,%.1f,%.1f%n", config, skew, hhi, trials, mean, stddev, min, max);
     }
 }
