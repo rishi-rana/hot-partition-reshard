@@ -390,6 +390,32 @@ public final class BenchmarkRunner {
         return new KafkaConsumer<>(props);
     }
 
+    /**
+     * The fallback mechanism from the design doc's Mechanism section: offset ranges
+     * instead of key buckets, with a per-key dependency barrier instead of key-hash
+     * routing for correctness. In-process only (the design doc's own open questions list
+     * this as the thing still not compared against the key-bucket mechanism; cross-process
+     * transports for this mechanism are not built).
+     */
+    public Result runFullMechanismRangeBarrier(String topic, TopicPartition tp, int recordCount, int numRanges,
+                                                 long dependencyTimeoutMs) {
+        Properties props = baseConsumerProps("rangebarrier-" + topic);
+        KafkaConsumer<String, byte[]> kafkaConsumer = new KafkaConsumer<>(props);
+        try (var owner = new com.hotpartition.reshard.rangebarrier.RangeBarrierOwningConsumer(
+                kafkaConsumer, tp, numRanges, (rec, done) -> {
+            busyWork();
+            done.run();
+        }, dependencyTimeoutMs)) {
+            owner.assignAndSeek();
+            long endOffset = kafkaConsumer.endOffsets(List.of(tp)).get(tp);
+
+            long start = System.currentTimeMillis();
+            owner.runToCompletion(endOffset);
+            long elapsed = System.currentTimeMillis() - start;
+            return new Result("full-mechanism-range-barrier", 0, 0, recordCount, elapsed, rate(recordCount, elapsed));
+        }
+    }
+
     private Properties baseConsumerProps(String groupId) {
         Properties props = new Properties();
         props.put("bootstrap.servers", bootstrapServers);

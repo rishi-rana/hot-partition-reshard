@@ -57,6 +57,8 @@ public final class Main {
         long rpcLingerMs = Long.getLong("rpcLingerMs", 5L);
         boolean includeClaim = Boolean.getBoolean("includeClaim");
         int claimNumPeers = Integer.getInteger("claimNumPeers", numBuckets);
+        boolean includeRangeBarrier = Boolean.getBoolean("includeRangeBarrier");
+        long dependencyTimeoutMs = Long.getLong("dependencyTimeoutMs", 5000L);
         double[] skews = {0.0, 0.5, 1.0, 1.5, 2.5};
 
         SyntheticWorkloadProducer producer = new SyntheticWorkloadProducer(bootstrapServers);
@@ -103,6 +105,12 @@ public final class Main {
                 var claim = runner.runFullMechanismClaim(topic, tp, recordCount, numBuckets, claimNumPeers,
                         processingNanos);
                 results.add(withSkewHhi(claim, skew, hhi));
+            }
+
+            if (includeRangeBarrier) {
+                var rangeBarrier = runner.runFullMechanismRangeBarrier(topic, tp, recordCount, numBuckets,
+                        dependencyTimeoutMs);
+                results.add(withSkewHhi(rangeBarrier, skew, hhi));
             }
         }
 
