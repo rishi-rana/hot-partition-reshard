@@ -49,7 +49,7 @@ tasks.named<JavaExec>("run") {
     listOf(
         "bootstrap.servers", "recordCount", "numKeys", "numBuckets",
         "processingNanosPerRecord", "replicationFactor", "api.version", "includeSpillover", "debugFullMechanism",
-        "includeRpc", "rpcBasePort"
+        "includeRpc", "rpcBasePort", "includeBatchedRpc", "rpcBatchSize", "rpcLingerMs"
     ).forEach { key ->
         System.getProperty(key)?.let { systemProperty(key, it) }
     }

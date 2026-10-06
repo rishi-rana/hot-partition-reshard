@@ -52,6 +52,9 @@ public final class Main {
         boolean includeSpillover = Boolean.getBoolean("includeSpillover");
         boolean includeRpc = Boolean.getBoolean("includeRpc");
         int rpcBasePort = Integer.getInteger("rpcBasePort", 9500);
+        boolean includeBatchedRpc = Boolean.getBoolean("includeBatchedRpc");
+        int rpcBatchSize = Integer.getInteger("rpcBatchSize", 50);
+        long rpcLingerMs = Long.getLong("rpcLingerMs", 5L);
         double[] skews = {0.0, 0.5, 1.0, 1.5, 2.5};
 
         SyntheticWorkloadProducer producer = new SyntheticWorkloadProducer(bootstrapServers);
@@ -86,6 +89,12 @@ public final class Main {
             if (includeRpc) {
                 var rpc = runner.runFullMechanismRpc(topic, tp, recordCount, numBuckets, processingNanos, rpcBasePort);
                 results.add(withSkewHhi(rpc, skew, hhi));
+            }
+
+            if (includeBatchedRpc) {
+                var batchedRpc = runner.runFullMechanismBatchedRpc(topic, tp, recordCount, numBuckets,
+                        processingNanos, rpcBasePort + 100, rpcBatchSize, rpcLingerMs);
+                results.add(withSkewHhi(batchedRpc, skew, hhi));
             }
         }
 

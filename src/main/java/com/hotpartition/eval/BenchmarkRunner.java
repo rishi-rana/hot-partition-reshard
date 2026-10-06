@@ -204,9 +204,9 @@ public final class BenchmarkRunner {
 
     /**
      * Same drain as {@link #runFullMechanism}, but delegating via transport Option A
-     * (direct RPC) to genuinely separate OS processes -- lowest-latency of the three
-     * transports, since there's no broker hop at all for the delegation path itself
-     * (unlike Option B's produce+consume round trip each way).
+     * (direct RPC) to genuinely separate OS processes. Despite having no broker hop at
+     * all for the delegation path, this measured *slower* than Option B (spillover) --
+     * see {@link #runFullMechanismBatchedRpc} for the batching follow-up this motivated.
      */
     public Result runFullMechanismRpc(String topic, TopicPartition tp, int recordCount, int numBuckets,
                                        long processingNanosPerRecord, int basePort) throws Exception {
@@ -240,6 +240,57 @@ public final class BenchmarkRunner {
             }
             long elapsed = System.currentTimeMillis() - start;
             return new Result("full-mechanism-rpc", 0, 0, recordCount, elapsed, rate(recordCount, elapsed));
+        } finally {
+            for (Process p : peers) {
+                p.destroy();
+            }
+            for (Process p : peers) {
+                p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS);
+                p.destroyForcibly();
+            }
+        }
+    }
+
+    /**
+     * Follow-up to {@link #runFullMechanismRpc}: tests whether giving direct RPC a
+     * batching primitive (Kafka-style batch.size/linger.ms) closes the throughput gap
+     * against the spillover transport, per the design doc's hypothesis that the gap is
+     * explained by Kafka's own client-side batching rather than anything intrinsic to
+     * avoiding the broker hop.
+     */
+    public Result runFullMechanismBatchedRpc(String topic, TopicPartition tp, int recordCount, int numBuckets,
+                                              long processingNanosPerRecord, int basePort,
+                                              int rpcBatchSize, long rpcLingerMs) throws Exception {
+        List<Process> peers = new ArrayList<>();
+        for (int b = 0; b < numBuckets; b++) {
+            int port = basePort + b;
+            peers.add(new ProcessBuilder(
+                    "java", "-cp", System.getProperty("java.class.path"),
+                    "com.hotpartition.transport.rpc.BatchedRpcPeerWorker",
+                    String.valueOf(port), String.valueOf(b), String.valueOf(processingNanosPerRecord))
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start());
+        }
+        Thread.sleep(2000);
+
+        Properties props = baseConsumerProps("batched-rpc-" + topic);
+        KafkaConsumer<String, byte[]> kafkaConsumer = new KafkaConsumer<>(props);
+        try (OwningConsumer owner = new OwningConsumer(kafkaConsumer, tp, numBuckets, (rec, done) -> {
+            throw new IllegalStateException("processor must not run on the owner side for the batched RPC transport");
+        }, bucketId -> new com.hotpartition.transport.rpc.BatchedRpcBucketWorker(
+                bucketId, "localhost", basePort + bucketId, rpcBatchSize, rpcLingerMs))) {
+            owner.assignAndSeek();
+            kafkaConsumer.seekToBeginning(List.of(tp));
+            owner.forceReshardActive(true);
+
+            long start = System.currentTimeMillis();
+            long endOffset = kafkaConsumer.endOffsets(List.of(tp)).get(tp);
+            while (owner.lastCommittedOffset() + 1 < endOffset) {
+                owner.pollOnce(Duration.ofMillis(500));
+            }
+            long elapsed = System.currentTimeMillis() - start;
+            return new Result("full-mechanism-batched-rpc", 0, 0, recordCount, elapsed, rate(recordCount, elapsed));
         } finally {
             for (Process p : peers) {
                 p.destroy();
