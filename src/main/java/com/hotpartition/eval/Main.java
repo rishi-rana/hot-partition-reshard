@@ -86,7 +86,10 @@ public final class Main {
         int claimNumPeers = Integer.getInteger("claimNumPeers", numBuckets);
         boolean includeRangeBarrier = Boolean.getBoolean("includeRangeBarrier");
         long dependencyTimeoutMs = Long.getLong("dependencyTimeoutMs", 5000L);
-        double[] skews = {0.0, 0.5, 1.0, 1.5, 2.5};
+        // Extended beyond the original 0.0-2.5 range to actually reach the single-dominant-key
+        // regime (Section 3's capacity bound: lambda_key >= mu_worker) rather than stopping
+        // short of it -- the paper's own central theoretical claim was previously untested.
+        double[] skews = {0.0, 0.5, 1.0, 1.5, 2.5, 3.5, 4.5, 6.0, 8.0};
 
         SyntheticWorkloadProducer producer = new SyntheticWorkloadProducer(bootstrapServers);
         BenchmarkRunner runner = new BenchmarkRunner(bootstrapServers, processingNanos);
@@ -173,7 +176,9 @@ public final class Main {
         int rpcBatchSize = Integer.getInteger("rpcBatchSize", 50);
         long rpcLingerMs = Long.getLong("rpcLingerMs", 5L);
         long dependencyTimeoutMs = Long.getLong("dependencyTimeoutMs", 5000L);
-        double[] skews = {0.0, 2.5};
+        // Full five-point sweep from the original single-run skew array, plus the same
+        // extension into the single-dominant-key regime used in runSweep.
+        double[] skews = {0.0, 0.5, 1.0, 1.5, 2.5, 3.5, 4.5, 6.0, 8.0};
 
         SyntheticWorkloadProducer producer = new SyntheticWorkloadProducer(bootstrapServers);
         BenchmarkRunner runner = new BenchmarkRunner(bootstrapServers, processingNanos);
