@@ -19,6 +19,14 @@ public final class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
 
     public static void main(String[] args) throws Exception {
+        // Pure-JVM: transport Option A needs no Kafka broker at all for its own delegation
+        // path, so this experiment is handled before any broker (external or Testcontainers)
+        // is required, unlike every other mode below.
+        if (Boolean.getBoolean("admissionControlRace")) {
+            runAdmissionControlRace();
+            return;
+        }
+
         String external = System.getProperty("bootstrap.servers", System.getenv("BOOTSTRAP_SERVERS"));
         KafkaContainer container = null;
         String bootstrapServers;
@@ -47,6 +55,54 @@ public final class Main {
                 container.stop();
             }
         }
+    }
+
+    private static void runAdmissionControlRace() throws Exception {
+        int port = Integer.getInteger("admissionRacePort", 17000);
+        int recordsPerOwner = Integer.getInteger("admissionRaceRecordsPerOwner", 60);
+        long processingNanos = Long.getLong("admissionRaceProcessingNanosPerRecord", 10_000_000L);
+        double muWorkerCapacity = Double.parseDouble(System.getProperty("admissionRaceMuWorkerCapacity", "100.0"));
+        double perOwnerOfferedLambda = Double.parseDouble(System.getProperty("admissionRaceOfferedLambda", "70.0"));
+        // Defaults (120s / 5s) match the original hardcoded toy-scale values; at larger
+        // recordsPerOwner these need to be raised explicitly -- see runAdmissionControlRace's
+        // caller docs.
+        long awaitTimeoutSeconds = Long.getLong("admissionRaceAwaitTimeoutSeconds", 120L);
+        long joinTimeoutMs = Long.getLong("admissionRaceJoinTimeoutMs", 5000L);
+
+        AdmissionControlRaceExperiment experiment = new AdmissionControlRaceExperiment();
+
+        log.info("=== WITHOUT admission control (port {}) ===", port);
+        var without = experiment.runWithoutAdmissionControl(port, recordsPerOwner, processingNanos,
+                muWorkerCapacity, perOwnerOfferedLambda, awaitTimeoutSeconds, joinTimeoutMs);
+        System.out.println("--- WITHOUT admission control ---");
+        System.out.printf("muWorkerCapacity=%.1f owner1OfferedLambda=%.1f owner2OfferedLambda=%.1f%n",
+                without.muWorkerCapacity(), without.owner1OfferedLambda(), without.owner2OfferedLambda());
+        System.out.printf("totalElapsedMs=%d achievedCombinedThroughputPerSec=%.2f%n",
+                without.totalElapsedMs(), without.achievedCombinedThroughputPerSec());
+        System.out.printf("owner1Latency avgMs=%.2f maxMs=%.2f p95Ms=%.2f n=%d%n",
+                without.owner1Latency().avgMs(), without.owner1Latency().maxMs(),
+                without.owner1Latency().p95Ms(), without.owner1Latency().count());
+        System.out.printf("owner2Latency avgMs=%.2f maxMs=%.2f p95Ms=%.2f n=%d%n",
+                without.owner2Latency().avgMs(), without.owner2Latency().maxMs(),
+                without.owner2Latency().p95Ms(), without.owner2Latency().count());
+
+        log.info("=== WITH admission control (port {}) ===", port + 1);
+        var with = experiment.runWithAdmissionControl(port + 1, recordsPerOwner, processingNanos,
+                muWorkerCapacity, perOwnerOfferedLambda, awaitTimeoutSeconds, joinTimeoutMs);
+        System.out.println("--- WITH admission control ---");
+        System.out.printf("muWorkerCapacity=%.1f owner1OfferedLambda=%.1f owner2OfferedLambda=%.1f%n",
+                with.muWorkerCapacity(), with.owner1OfferedLambda(), with.owner2OfferedLambda());
+        System.out.printf("admittedLoadAfterBothClaim=%.1f admittedLoadStayedUnderCapacity=%s%n",
+                with.admittedLoadAfterBothClaim(), with.admittedLoadStayedUnderCapacity());
+        System.out.printf("rejectedClaimCount=%d fallbackExecutionCount=%d%n",
+                with.rejectedClaimCount(), with.fallbackExecutionCount());
+        System.out.printf("totalElapsedMs=%d%n", with.totalElapsedMs());
+        System.out.printf("owner1Latency avgMs=%.2f maxMs=%.2f p95Ms=%.2f n=%d%n",
+                with.owner1Latency().avgMs(), with.owner1Latency().maxMs(),
+                with.owner1Latency().p95Ms(), with.owner1Latency().count());
+        System.out.printf("owner2Latency avgMs=%.2f maxMs=%.2f p95Ms=%.2f n=%d%n",
+                with.owner2Latency().avgMs(), with.owner2Latency().maxMs(),
+                with.owner2Latency().p95Ms(), with.owner2Latency().count());
     }
 
     private static void runReactionLatency(String bootstrapServers) throws Exception {

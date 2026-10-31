@@ -53,7 +53,10 @@ tasks.named<JavaExec>("run") {
         "includeClaim", "claimNumPeers", "includeRangeBarrier", "dependencyTimeoutMs",
         "measureReactionLatency", "warmupBatches", "warmupBatchSize", "warmupIntervalMs",
         "burstNumKeys", "burstSkew", "burstRecordCount", "detectionTimeoutMs",
-        "repeatedTrials", "trials"
+        "repeatedTrials", "trials",
+        "admissionControlRace", "admissionRacePort", "admissionRaceRecordsPerOwner",
+        "admissionRaceProcessingNanosPerRecord", "admissionRaceMuWorkerCapacity", "admissionRaceOfferedLambda",
+        "admissionRaceAwaitTimeoutSeconds", "admissionRaceJoinTimeoutMs"
     ).forEach { key ->
         System.getProperty(key)?.let { systemProperty(key, it) }
     }
