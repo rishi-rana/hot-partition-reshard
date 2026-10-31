@@ -26,6 +26,10 @@ public final class Main {
             runAdmissionControlRace();
             return;
         }
+        if (Boolean.getBoolean("manyOwnerContention")) {
+            runManyOwnerContention();
+            return;
+        }
 
         String external = System.getProperty("bootstrap.servers", System.getenv("BOOTSTRAP_SERVERS"));
         KafkaContainer container = null;
@@ -103,6 +107,44 @@ public final class Main {
         System.out.printf("owner2Latency avgMs=%.2f maxMs=%.2f p95Ms=%.2f n=%d%n",
                 with.owner2Latency().avgMs(), with.owner2Latency().maxMs(),
                 with.owner2Latency().p95Ms(), with.owner2Latency().count());
+    }
+
+    private static void runManyOwnerContention() throws Exception {
+        int basePort = Integer.getInteger("manyOwnerPort", 18000);
+        int numPeers = Integer.getInteger("manyOwnerNumPeers", 4);
+        int numOwners = Integer.getInteger("manyOwnerNumOwners", 12);
+        int recordsPerOwner = Integer.getInteger("manyOwnerRecordsPerOwner", 20000);
+        long processingNanos = Long.getLong("manyOwnerProcessingNanosPerRecord", 1_000_000L);
+        double muWorkerCapacity = Double.parseDouble(System.getProperty("manyOwnerMuWorkerCapacity", "1000.0"));
+        double perOwnerOfferedLambda = Double.parseDouble(System.getProperty("manyOwnerOfferedLambda", "500.0"));
+        long awaitTimeoutSeconds = Long.getLong("manyOwnerAwaitTimeoutSeconds", 300L);
+        long joinTimeoutMs = Long.getLong("manyOwnerJoinTimeoutMs", 5000L);
+
+        ManyOwnerContentionExperiment experiment = new ManyOwnerContentionExperiment();
+
+        log.info("=== Condition A: single-candidate, no retry (base port {}) ===", basePort);
+        var conditionA = experiment.runSingleCandidateCondition(basePort, numPeers, numOwners, recordsPerOwner,
+                processingNanos, muWorkerCapacity, perOwnerOfferedLambda, awaitTimeoutSeconds, joinTimeoutMs);
+        printManyOwnerResult(conditionA);
+
+        log.info("=== Condition B: ranked candidates, with retry (base port {}) ===", basePort + numPeers);
+        var conditionB = experiment.runRankedCandidateCondition(basePort + numPeers, numPeers, numOwners, recordsPerOwner,
+                processingNanos, muWorkerCapacity, perOwnerOfferedLambda, awaitTimeoutSeconds, joinTimeoutMs);
+        printManyOwnerResult(conditionB);
+    }
+
+    private static void printManyOwnerResult(ManyOwnerContentionExperiment.ConditionResult result) {
+        System.out.println("--- " + result.conditionName() + " ---");
+        for (var peer : result.peerOutcomes()) {
+            System.out.printf("peer %s:%d capacity=%.1f admittedClaimCount=%d admittedLoad=%.1f withinCapacity=%s%n",
+                    peer.host(), peer.port(), peer.muWorkerCapacity(), peer.admittedClaimCount(),
+                    peer.admittedLoad(), peer.admittedLoadWithinCapacity());
+        }
+        System.out.printf("ownersServedViaRpc=%d ownersFellBackToInProcess=%d aggregateAdmittedLoad=%.1f%n",
+                result.ownersServedViaRpc(), result.ownersFellBackToInProcess(), result.aggregateAdmittedLoad());
+        System.out.printf("totalRecordsExpected=%d totalRecordsCompleted=%d allRecordsCompleted=%s elapsedMs=%d%n",
+                result.totalRecordsExpected(), result.totalRecordsCompleted(), result.allRecordsCompleted(),
+                result.elapsedMs());
     }
 
     private static void runReactionLatency(String bootstrapServers) throws Exception {

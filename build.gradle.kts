@@ -56,7 +56,10 @@ tasks.named<JavaExec>("run") {
         "repeatedTrials", "trials",
         "admissionControlRace", "admissionRacePort", "admissionRaceRecordsPerOwner",
         "admissionRaceProcessingNanosPerRecord", "admissionRaceMuWorkerCapacity", "admissionRaceOfferedLambda",
-        "admissionRaceAwaitTimeoutSeconds", "admissionRaceJoinTimeoutMs"
+        "admissionRaceAwaitTimeoutSeconds", "admissionRaceJoinTimeoutMs",
+        "manyOwnerContention", "manyOwnerPort", "manyOwnerNumPeers", "manyOwnerNumOwners",
+        "manyOwnerRecordsPerOwner", "manyOwnerProcessingNanosPerRecord", "manyOwnerMuWorkerCapacity",
+        "manyOwnerOfferedLambda", "manyOwnerAwaitTimeoutSeconds", "manyOwnerJoinTimeoutMs"
     ).forEach { key ->
         System.getProperty(key)?.let { systemProperty(key, it) }
     }
